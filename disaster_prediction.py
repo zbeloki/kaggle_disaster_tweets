@@ -15,18 +15,20 @@ LEARNING_RATE = 0.002
 NUM_EPOCHS = 400
 DEV_SIZE = 2200
 
-def train(fpath):
 
-    ops.reset_default_graph()
+def main(train_fpath, test_fpath, out_fpath):
 
     wvecs = load_embeddings('embeddings/en_vocabulary.pickle', 'embeddings/en_embedding_matrix.npy')
     m, n_x = wvecs[1].shape
     
-    entries = parse_input_data(fpath)
+    train_entries, test_entries = parse_input_data(train_fpath, test_fpath)
 
-    X_dev, Y_dev = create_emb_dataset(entries[:DEV_SIZE], wvecs)
-    X_train, Y_train = create_emb_dataset(entries[DEV_SIZE:], wvecs)
-    
+    X_dev, Y_dev = create_emb_dataset(train_entries[:DEV_SIZE], wvecs)
+    X_train, Y_train = create_emb_dataset(train_entries[DEV_SIZE:], wvecs)
+    X_test, _ = create_emb_dataset(test_entries, wvecs)
+
+    ops.reset_default_graph()
+
     keep_prob = tf.placeholder(tf.float32, name='keep_prob')
     
     X = tf.placeholder(tf.float32, shape=[n_x, None], name='X')
@@ -55,9 +57,8 @@ def train(fpath):
     optimizer = tf.train.AdamOptimizer(LEARNING_RATE).minimize(cost)
     
     init = tf.global_variables_initializer()
-
-    np.set_printoptions(threshold=sys.maxsize)
     with tf.Session() as sess:
+
         sess.run(init)
         
         for epoch in range(NUM_EPOCHS):
@@ -71,6 +72,17 @@ def train(fpath):
         print ("Train Accuracy:", accuracy.eval({X: X_train, Y: Y_train, keep_prob: 1.0}))
         print ("Test Accuracy:", accuracy.eval({X: X_dev, Y: Y_dev, keep_prob: 1.0}))
 
+        if out_fpath is not None:
+
+            test_pred = predictions.eval({X: X_test, keep_prob: 1.0})
+            
+            with open(out_fpath, 'w') as f:
+                print("id,target", file=f)
+                for i in range(len(test_entries)):
+                    eid = test_entries[i][0]
+                    pred = int(test_pred[0][i])
+                    print("{},{}".format(eid, pred), file=f)
+
 
 def load_embeddings(vocab_f, matrix_f):
 
@@ -82,20 +94,28 @@ def load_embeddings(vocab_f, matrix_f):
     return (vocab, E)
     
 
-def parse_input_data(fpath):
+def parse_input_data(train_fpath, test_fpath):
 
-    entries = []
-    with open(fpath, newline='') as f:
+    train_entries = []
+    with open(train_fpath, newline='') as f:
         reader = csv.DictReader(f)
         for row in reader:
             id_ = int(row['id'])
             text = ' '.join([row['keyword'], row['location'], row['text']]).lower()
             cls = int(row['target'])
-            entries.append( (id_, text, cls) )
+            train_entries.append( (id_, text, cls) )
 
-    random.shuffle(entries)
+    test_entries = []
+    with open(test_fpath, newline='') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            id_ = int(row['id'])
+            text = ' '.join([row['keyword'], row['location'], row['text']]).lower()
+            test_entries.append( (id_, text, None) )
 
-    return entries
+    random.shuffle(train_entries)
+
+    return train_entries, test_entries
 
 
 def create_emb_dataset(entries, wvecs):
@@ -154,7 +174,8 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("train", help='Train CSV file')
-    #parser.add_argument("model", help='Output model')
+    parser.add_argument("test", help='Test CSV file')
+    parser.add_argument("--output", required=False, help='Output CSV file containing testset with labels')
     args = parser.parse_args()
 
-    train(args.train)
+    main(args.train, args.test, args.output)
