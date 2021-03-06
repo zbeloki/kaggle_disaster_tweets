@@ -18,7 +18,8 @@ DEV_SIZE = 2200
 
 def main(train_fpath, test_fpath, out_fpath):
 
-    wvecs = load_embeddings('embeddings/en_vocabulary.pickle', 'embeddings/en_embedding_matrix.npy')
+    wvecs = load_default_embeddings('embeddings/en_vocabulary.pickle', 'embeddings/en_embedding_matrix.npy')
+    #wvecs = load_glove_embeddings('embeddings/glove.twitter.27B.200d.txt')
     m, n_x = wvecs[1].shape
     
     train_entries, test_entries = parse_input_data(train_fpath, test_fpath)
@@ -84,15 +85,37 @@ def main(train_fpath, test_fpath, out_fpath):
                     print("{},{}".format(eid, pred), file=f)
 
 
-def load_embeddings(vocab_f, matrix_f):
+def load_default_embeddings(vocab_f, matrix_f):
 
     with open(vocab_f, 'rb') as f:
         vocab = pickle.load(f)
+        vocab = { w: vocab[w][0] for w in vocab.keys() }
 
     E = np.load(matrix_f)
 
     return (vocab, E)
-    
+
+
+def load_glove_embeddings(fpath):
+
+    vocab = {}
+    vectors = []
+    d = None
+    with open(fpath, 'r') as f:
+        i = 0
+        for ln in f.readlines():
+            ln_items = ln.split()
+            if i == 0:
+                d = len(ln_items)
+            if len(ln_items) == d:
+                vocab[ln_items[0]] = i
+                vectors.append([ float(v) for v in ln_items[1:] ])
+                i += 1
+
+    E = np.array(vectors)
+
+    return (vocab, E)
+
 
 def parse_input_data(train_fpath, test_fpath):
 
@@ -131,7 +154,7 @@ def create_emb_dataset(entries, wvecs):
         text_words = set(word_tokenize(entries[i][1]))
         for word in text_words:
             if word in vocab:
-                widx = vocab[word][0]
+                widx = vocab[word]
                 X[:,i] += E[widx]
             # else: if OOV, then add zero-vector (= do nothing)
         X[:,i] /= len(text_words)
