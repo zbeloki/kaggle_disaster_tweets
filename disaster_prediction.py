@@ -1,48 +1,38 @@
 import tensorflow as tf
 from tensorflow.python.framework import ops
 import numpy as np
+from nltk.tokenize import word_tokenize
 
 import argparse
 import csv
 import random
+import pickle
 import sys
 
 import pdb
 
-ITERATIONS = 10
-LEARNING_RATE = 0.1
-NUM_EPOCHS = 15
-LAMBD = 0.3
-
-# TODOs:
-# - tf.one_hot() erabili
-
+LEARNING_RATE = 0.002
+NUM_EPOCHS = 400
+DEV_SIZE = 2200
 
 def train(fpath):
 
     ops.reset_default_graph()
+
+    wvecs = load_embeddings('embeddings/en_vocabulary.pickle', 'embeddings/en_embedding_matrix.npy')
+    m, n_x = wvecs[1].shape
     
     entries = parse_input_data(fpath)
 
-    w2i = create_word_dict(entries)
-    n_x = len(w2i)
+    X_dev, Y_dev = create_emb_dataset(entries[:DEV_SIZE], wvecs)
+    X_train, Y_train = create_emb_dataset(entries[DEV_SIZE:], wvecs)
     
-    X_dev, Y_dev = create_dataset(entries[:1000], w2i)
-    X_test, Y_test = create_dataset(entries[1000:2000], w2i)
-    X_train, Y_train = create_dataset(entries[2000:], w2i)
-    
-    # m = X.shape[1]
-    # mu = (1/m) * np.sum(X, axis=1, keepdims=True)
-    # std = np.sqrt((1/m) * np.sum(X * X, axis=1, keepdims=True))
-    # X = (X - mu) / std
-
     keep_prob = tf.placeholder(tf.float32, name='keep_prob')
     
     X = tf.placeholder(tf.float32, shape=[n_x, None], name='X')
     Y = tf.placeholder(tf.float32, shape=[1, None], name='Y')
 
-    layer_lens = [n_x, 25, 12, 1]
-    #layer_lens = [n_x, 1]
+    layer_lens = [n_x, 8, 4, 1]
     
     W1 = tf.get_variable("W1", [layer_lens[1],layer_lens[0]], initializer=tf.contrib.layers.xavier_initializer())
     b1 = tf.get_variable("b1", [layer_lens[1],1], initializer=tf.zeros_initializer())
@@ -71,8 +61,8 @@ def train(fpath):
         sess.run(init)
         
         for epoch in range(NUM_EPOCHS):
-            _, cost_ = sess.run([optimizer, cost], feed_dict={X:X_train, Y:Y_train, keep_prob: 0.7})
-            print("Epoch: {} | Cost: {}".format(epoch, cost_))
+            _, cost_ = sess.run([optimizer, cost], feed_dict={X:X_train, Y:Y_train, keep_prob: 0.75})
+            print("Epoch: {} | Cost: {}".format(epoch+1, cost_))
 
         predictions = tf.round(tf.sigmoid(Z3))
         correct_prediction = tf.equal(predictions, Y)
@@ -80,7 +70,17 @@ def train(fpath):
         
         print ("Train Accuracy:", accuracy.eval({X: X_train, Y: Y_train, keep_prob: 1.0}))
         print ("Test Accuracy:", accuracy.eval({X: X_dev, Y: Y_dev, keep_prob: 1.0}))
-            
+
+
+def load_embeddings(vocab_f, matrix_f):
+
+    with open(vocab_f, 'rb') as f:
+        vocab = pickle.load(f)
+
+    E = np.load(matrix_f)
+
+    return (vocab, E)
+    
 
 def parse_input_data(fpath):
 
@@ -98,6 +98,28 @@ def parse_input_data(fpath):
     return entries
 
 
+def create_emb_dataset(entries, wvecs):
+
+    vocab, E = wvecs
+
+    m = len(entries)
+    n_x = E.shape[1]
+
+    X = np.zeros((n_x, m))
+    Y = np.zeros((1, m))
+    for i in range(m):
+        text_words = set(word_tokenize(entries[i][1]))
+        for word in text_words:
+            if word in vocab:
+                widx = vocab[word][0]
+                X[:,i] += E[widx]
+            # else: if OOV, then add zero-vector (= do nothing)
+        X[:,i] /= len(text_words)
+        Y[0][i] = entries[i][2]
+
+    return X, Y
+
+
 def create_word_dict(entries):
 
     words = set()
@@ -109,7 +131,7 @@ def create_word_dict(entries):
         word2index[word] = i
 
     return word2index
-        
+            
 
 def create_dataset(entries, w2i):
 
