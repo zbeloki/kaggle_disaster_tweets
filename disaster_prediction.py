@@ -170,6 +170,7 @@ def create_emb_dataset(entries, wvecs):
 
     m = len(entries)
     n_x = E.shape[1]
+    unk_vec = np.mean(E, axis=0)
 
     X = np.zeros((n_x, m))
     Y = np.zeros((1, m))
@@ -179,7 +180,8 @@ def create_emb_dataset(entries, wvecs):
             if word in vocab:
                 widx = vocab[word]
                 X[:,i] += E[widx]
-            # else: if OOV, then add zero-vector (= do nothing)
+            else:
+                X[:,i] += unk_vec
         X[:,i] /= len(text_words)
         Y[0][i] = entries[i][2]
 
