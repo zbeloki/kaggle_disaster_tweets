@@ -9,13 +9,14 @@ import random
 import pickle
 import sys
 import re
+import math
 
 import pdb
 
 LEARNING_RATE = 0.002
-NUM_EPOCHS = 100
-DO_KEEP_RATE = 0.6
-DEV_SIZE = 3000
+NUM_EPOCHS = 20
+DO_KEEP_RATE = 0.5
+DEV_SIZE = 2500
 BATCH_SIZE = 500
 Tx = 22  # max sentence size
 
@@ -38,45 +39,32 @@ def main(train_fpath, test_fpath, out_fpath):
     
     X = tf.placeholder(tf.float32, shape=[n_x, None, Tx], name='X')
     Y = tf.placeholder(tf.float32, shape=[1, None], name='Y')
-    
-    # layer_lens = [n_x, 8, 4, 1]
-    
-    # W1 = tf.get_variable("W1", [layer_lens[1],layer_lens[0]], initializer=tf.contrib.layers.xavier_initializer())
-    # b1 = tf.get_variable("b1", [layer_lens[1],1], initializer=tf.zeros_initializer())
-    # W2 = tf.get_variable("W2", [layer_lens[2],layer_lens[1]], initializer=tf.contrib.layers.xavier_initializer())
-    # b2 = tf.get_variable("b2", [layer_lens[2],1], initializer=tf.zeros_initializer())
-    # W3 = tf.get_variable("W3", [layer_lens[3],layer_lens[2]], initializer=tf.contrib.layers.xavier_initializer())
-    # b3 = tf.get_variable("b3", [layer_lens[3],1], initializer=tf.zeros_initializer())
 
-    h = 50
-    Wa = tf.get_variable("Wa", [h, h + n_x], initializer=tf.contrib.layers.xavier_initializer())
-    Wy = tf.get_variable("Wy", [1, h], initializer=tf.contrib.layers.xavier_initializer())
-    b_a = tf.get_variable("b_a", [h, 1], initializer=tf.zeros_initializer())
-    b_y = tf.get_variable("b_y", [1, 1], initializer=tf.zeros_initializer())
-    
-    # Z1 = tf.add(tf.matmul(W1, X), b1)
-    # A1 = tf.nn.dropout(tf.nn.relu(Z1), keep_prob)
-    # Z2 = tf.add(tf.matmul(W2, A1), b2)
-    # A2 = tf.nn.dropout(tf.nn.relu(Z2), keep_prob)
-    # Z3 = tf.add(tf.matmul(W3, A2), b3)
+    h = 100
+    params = {}
+    params['Wc'] = tf.get_variable("Wc", [h, h + n_x], initializer=tf.contrib.layers.xavier_initializer())
+    params['Wu'] = tf.get_variable("Wu", [h, h + n_x], initializer=tf.contrib.layers.xavier_initializer())
+    params['Wf'] = tf.get_variable("Wf", [h, h + n_x], initializer=tf.contrib.layers.xavier_initializer())
+    params['Wo'] = tf.get_variable("Wo", [h, h + n_x], initializer=tf.contrib.layers.xavier_initializer())
+    params['Wy'] = tf.get_variable("Wy", [1, h], initializer=tf.contrib.layers.xavier_initializer())
+    params['b_c'] = tf.get_variable("b_c", [h, 1], initializer=tf.zeros_initializer())
+    params['b_u'] = tf.get_variable("b_u", [h, 1], initializer=tf.zeros_initializer())
+    params['b_f'] = tf.get_variable("b_f", [h, 1], initializer=tf.zeros_initializer())
+    params['b_o'] = tf.get_variable("b_o", [h, 1], initializer=tf.zeros_initializer())
+    params['b_y'] = tf.get_variable("b_y", [1, 1], initializer=tf.zeros_initializer())
 
-    a_prev = tf.get_variable("a_prev", [h, BATCH_SIZE], initializer=tf.zeros_initializer())
+    C_prev = tf.get_variable("C_prev", [h, BATCH_SIZE], initializer=tf.zeros_initializer())
+    A_prev = tf.get_variable("A_prev", [h, BATCH_SIZE], initializer=tf.zeros_initializer())
 
-    #out_z_array = []  #tf.get_variable("out_z", [1, m], initializer=tf.zeros_initializer())
     for t in range(Tx):
         Xt = X[:,:,t]
-        i_v = tf.concat([a_prev, Xt], 0)
-        z = tf.add(tf.matmul(Wa, i_v), b_a)
-        a = tf.nn.dropout(tf.nn.relu(z), keep_prob)
-        a_prev = a
-    #out_z_array.append(tf.add(tf.matmul(Wy, a), b_y))
-    out_z = tf.add(tf.matmul(Wy, a), b_y)
+        A_prev, C_prev = lstm_cell(Xt, A_prev, C_prev, params)
+    out_z = tf.add(tf.matmul(params['Wy'], A_prev), params['b_y'])
 
     logits = tf.transpose(out_z)
     labels = tf.transpose(Y)
 
     cost = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=labels))
-
     optimizer = tf.train.AdamOptimizer(LEARNING_RATE).minimize(cost)
     
     init = tf.global_variables_initializer()
@@ -84,46 +72,82 @@ def main(train_fpath, test_fpath, out_fpath):
 
         sess.run(init)
 
-        num_batches = int(X_train.shape[1] / BATCH_SIZE)
-        for epoch in range(NUM_EPOCHS):
-            print("Epoch: {}".format(epoch+1))
-            for i_batch in range(num_batches):
-                X_batch = X_train[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
-                Y_batch = Y_train[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
-                _, cost_ = sess.run([optimizer, cost], feed_dict={X:X_batch, Y:Y_batch, keep_prob: DO_KEEP_RATE})
-                print("Batch: {} | Cost: {}".format(i_batch, cost_))
-
+        train(X_train, Y_train, sess, optimizer, cost)
+        
         predictions = tf.round(tf.sigmoid(out_z))
         correct_prediction = tf.equal(predictions, Y)
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
 
-        accuracies_train = []
+        accuracy_train = get_accuracy(X_train, Y_train, accuracy)
+        print ("Train Accuracy: {}".format(accuracy_train))
+
+        accuracy_dev = get_accuracy(X_dev, Y_dev, accuracy)
+        print ("Dev Accuracy: {}".format(accuracy_dev))
+
+        if out_fpath is not None:
+            test_pred = []
+            num_batches = math.ceil(X_test.shape[1] / BATCH_SIZE)
+            for i_batch in range(num_batches):
+                X_batch = np.zeros([n_x, BATCH_SIZE, Tx])
+                i_first = i_batch * BATCH_SIZE
+                i_last = min((i_batch + 1) * BATCH_SIZE, X_test.shape[1])
+                X_batch[: , :i_last-i_first, :] = X_test[: , i_first:i_last, :]
+                ys = predictions.eval({X: X_batch, keep_prob: 1.0})
+                for y in ys[0]:
+                    test_pred.append(y)
+            with open(out_fpath, 'w') as f:
+                print("id,target", file=f)
+                for i in range(len(test_entries)):
+                    eid = test_entries[i][0]
+                    pred = int(test_pred[i])
+                    print("{},{}".format(eid, pred), file=f)
+
+
+def lstm_cell(Xt, A_prev, C_prev, params):
+
+    i_v = tf.concat([A_prev, Xt], 0)
+    C_new = tf.math.tanh(tf.add(tf.matmul(params['Wc'], i_v), params['b_c']))
+    Gu = tf.math.sigmoid(tf.add(tf.matmul(params['Wu'], i_v), params['b_u']))
+    Gf = tf.math.sigmoid(tf.add(tf.matmul(params['Wf'], i_v), params['b_f']))
+    Go = tf.math.sigmoid(tf.add(tf.matmul(params['Wo'], i_v), params['b_o']))
+    C = Gu * C_new + Gf * C_prev
+    A = tf.nn.dropout(Go * tf.math.tanh(C), DO_KEEP_RATE)
+
+    return A, C
+
+
+def train(X_data, Y_data, session, optimizer, cost):
+
+    X = tf.get_default_graph().get_tensor_by_name("X:0")
+    Y = tf.get_default_graph().get_tensor_by_name("Y:0")
+    keep_prob = tf.get_default_graph().get_tensor_by_name("keep_prob:0")
+    
+    num_batches = int(X_data.shape[1] / BATCH_SIZE)
+    for epoch in range(NUM_EPOCHS):
+        print("Epoch: {}".format(epoch+1))
         for i_batch in range(num_batches):
-            X_batch = X_train[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
-            Y_batch = Y_train[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
-            accuracies_train.append(accuracy.eval({X: X_batch, Y: Y_batch, keep_prob: 1.0}))
-        print ("Train Accuracy: {}".format(sum(accuracies_train)/len(accuracies_train)))
+            X_batch = X_data[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
+            Y_batch = Y_data[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
+            _, batch_cost = session.run([optimizer, cost], feed_dict={X:X_batch, Y:Y_batch, keep_prob: DO_KEEP_RATE})
+            print("Batch: {} | Cost: {}".format(i_batch, batch_cost))
 
-        num_batches = int(X_dev.shape[1] / BATCH_SIZE)
-        accuracies_dev = []
-        for i_batch in range(num_batches):
-            X_batch = X_dev[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
-            Y_batch = Y_dev[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
-            accuracies_dev.append(accuracy.eval({X: X_batch, Y: Y_batch, keep_prob: 1.0}))
-        print ("Dev Accuracy: {}".format(sum(accuracies_dev)/len(accuracies_dev)))
 
-        # if out_fpath is not None:
+def get_accuracy(X_data, Y_data, accuracy):
 
-        #     test_pred = predictions.eval({X: X_test, keep_prob: 1.0})
+    X = tf.get_default_graph().get_tensor_by_name("X:0")
+    Y = tf.get_default_graph().get_tensor_by_name("Y:0")
+    keep_prob = tf.get_default_graph().get_tensor_by_name("keep_prob:0")
+
+    num_batches = int(X_data.shape[1] / BATCH_SIZE)
+    accuracies = []
+    for i_batch in range(num_batches):
+        X_batch = X_data[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
+        Y_batch = Y_data[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
+        accuracies.append(accuracy.eval({X: X_batch, Y: Y_batch, keep_prob: 1.0}))
+
+    return sum(accuracies) / len(accuracies)
+    
             
-        #     with open(out_fpath, 'w') as f:
-        #         print("id,target", file=f)
-        #         for i in range(len(test_entries)):
-        #             eid = test_entries[i][0]
-        #             pred = int(test_pred[0][i])
-        #             print("{},{}".format(eid, pred), file=f)
-
-
 def load_default_embeddings(vocab_f, matrix_f):
 
     with open(vocab_f, 'rb') as f:
