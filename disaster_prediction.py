@@ -12,17 +12,19 @@ import re
 
 import pdb
 
-LEARNING_RATE = 0.002
-NUM_EPOCHS = 400
-DO_KEEP_RATE = 0.75
+LEARNING_RATE = 0.003
+NUM_EPOCHS = 100
+DO_KEEP_RATE = 0.8
 DEV_SIZE = 3000
+BATCH_SIZE = 300
+Tx = 22  # max sentence size
 
 
 def main(train_fpath, test_fpath, out_fpath):
 
-    #wvecs = load_default_embeddings('embeddings/en_vocabulary.pickle', 'embeddings/en_embedding_matrix.npy')
-    wvecs = load_glove_embeddings('embeddings/glove.twitter.27B.50d.txt')
-    m, n_x = wvecs[1].shape
+    wvecs = load_default_embeddings('embeddings/en_vocabulary.pickle', 'embeddings/en_embedding_matrix.npy')
+    #wvecs = load_glove_embeddings('embeddings/glove.twitter.27B.50d.txt')
+    n_v, n_x = wvecs[1].shape
     
     train_entries, test_entries = parse_input_data(train_fpath, test_fpath)
 
@@ -34,25 +36,43 @@ def main(train_fpath, test_fpath, out_fpath):
 
     keep_prob = tf.placeholder(tf.float32, name='keep_prob')
     
-    X = tf.placeholder(tf.float32, shape=[n_x, None], name='X')
+    X = tf.placeholder(tf.float32, shape=[n_x, None, Tx], name='X')
     Y = tf.placeholder(tf.float32, shape=[1, None], name='Y')
-
-    layer_lens = [n_x, 8, 4, 1]
     
-    W1 = tf.get_variable("W1", [layer_lens[1],layer_lens[0]], initializer=tf.contrib.layers.xavier_initializer())
-    b1 = tf.get_variable("b1", [layer_lens[1],1], initializer=tf.zeros_initializer())
-    W2 = tf.get_variable("W2", [layer_lens[2],layer_lens[1]], initializer=tf.contrib.layers.xavier_initializer())
-    b2 = tf.get_variable("b2", [layer_lens[2],1], initializer=tf.zeros_initializer())
-    W3 = tf.get_variable("W3", [layer_lens[3],layer_lens[2]], initializer=tf.contrib.layers.xavier_initializer())
-    b3 = tf.get_variable("b3", [layer_lens[3],1], initializer=tf.zeros_initializer())
+    # layer_lens = [n_x, 8, 4, 1]
+    
+    # W1 = tf.get_variable("W1", [layer_lens[1],layer_lens[0]], initializer=tf.contrib.layers.xavier_initializer())
+    # b1 = tf.get_variable("b1", [layer_lens[1],1], initializer=tf.zeros_initializer())
+    # W2 = tf.get_variable("W2", [layer_lens[2],layer_lens[1]], initializer=tf.contrib.layers.xavier_initializer())
+    # b2 = tf.get_variable("b2", [layer_lens[2],1], initializer=tf.zeros_initializer())
+    # W3 = tf.get_variable("W3", [layer_lens[3],layer_lens[2]], initializer=tf.contrib.layers.xavier_initializer())
+    # b3 = tf.get_variable("b3", [layer_lens[3],1], initializer=tf.zeros_initializer())
 
-    Z1 = tf.add(tf.matmul(W1, X), b1)
-    A1 = tf.nn.dropout(tf.nn.relu(Z1), keep_prob)
-    Z2 = tf.add(tf.matmul(W2, A1), b2)
-    A2 = tf.nn.dropout(tf.nn.relu(Z2), keep_prob)
-    Z3 = tf.add(tf.matmul(W3, A2), b3)
+    h = 50
+    Wa = tf.get_variable("Wa", [h, h + n_x], initializer=tf.contrib.layers.xavier_initializer())
+    Wy = tf.get_variable("Wy", [1, h], initializer=tf.contrib.layers.xavier_initializer())
+    b_a = tf.get_variable("b_a", [h, 1], initializer=tf.zeros_initializer())
+    b_y = tf.get_variable("b_y", [1, 1], initializer=tf.zeros_initializer())
+    
+    # Z1 = tf.add(tf.matmul(W1, X), b1)
+    # A1 = tf.nn.dropout(tf.nn.relu(Z1), keep_prob)
+    # Z2 = tf.add(tf.matmul(W2, A1), b2)
+    # A2 = tf.nn.dropout(tf.nn.relu(Z2), keep_prob)
+    # Z3 = tf.add(tf.matmul(W3, A2), b3)
 
-    logits = tf.transpose(Z3)
+    a_prev = tf.get_variable("a_prev", [h, BATCH_SIZE], initializer=tf.zeros_initializer())
+
+    #out_z_array = []  #tf.get_variable("out_z", [1, m], initializer=tf.zeros_initializer())
+    for t in range(Tx):
+        Xt = X[:,:,t]
+        i_v = tf.concat([a_prev, Xt], 0)
+        z = tf.add(tf.matmul(Wa, i_v), b_a)
+        a = tf.nn.dropout(tf.nn.relu(z), keep_prob)
+        a_prev = a
+    #out_z_array.append(tf.add(tf.matmul(Wy, a), b_y))
+    out_z = tf.add(tf.matmul(Wy, a), b_y)
+
+    logits = tf.transpose(out_z)
     labels = tf.transpose(Y)
 
     cost = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=labels))
@@ -63,28 +83,45 @@ def main(train_fpath, test_fpath, out_fpath):
     with tf.Session() as sess:
 
         sess.run(init)
-        
-        for epoch in range(NUM_EPOCHS):
-            _, cost_ = sess.run([optimizer, cost], feed_dict={X:X_train, Y:Y_train, keep_prob: DO_KEEP_RATE})
-            print("Epoch: {} | Cost: {}".format(epoch+1, cost_))
 
-        predictions = tf.round(tf.sigmoid(Z3))
+        num_batches = int(X_train.shape[1] / BATCH_SIZE)
+        for epoch in range(NUM_EPOCHS):
+            print("Epoch: {}".format(epoch+1))
+            for i_batch in range(num_batches):
+                X_batch = X_train[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
+                Y_batch = Y_train[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
+                _, cost_ = sess.run([optimizer, cost], feed_dict={X:X_batch, Y:Y_batch, keep_prob: DO_KEEP_RATE})
+                print("Batch: {} | Cost: {}".format(i_batch, cost_))
+
+        predictions = tf.round(tf.sigmoid(out_z))
         correct_prediction = tf.equal(predictions, Y)
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
-        
-        print ("Train Accuracy:", accuracy.eval({X: X_train, Y: Y_train, keep_prob: 1.0}))
-        print ("Test Accuracy:", accuracy.eval({X: X_dev, Y: Y_dev, keep_prob: 1.0}))
 
-        if out_fpath is not None:
+        accuracies_train = []
+        for i_batch in range(num_batches):
+            X_batch = X_train[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
+            Y_batch = Y_train[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
+            accuracies_train.append(accuracy.eval({X: X_batch, Y: Y_batch, keep_prob: 1.0}))
+        print ("Train Accuracy: {}".format(sum(accuracies_train)/len(accuracies_train)))
 
-            test_pred = predictions.eval({X: X_test, keep_prob: 1.0})
+        num_batches = int(X_dev.shape[1] / BATCH_SIZE)
+        accuracies_dev = []
+        for i_batch in range(num_batches):
+            X_batch = X_dev[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
+            Y_batch = Y_dev[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
+            accuracies_dev.append(accuracy.eval({X: X_batch, Y: Y_batch, keep_prob: 1.0}))
+        print ("Dev Accuracy: {}".format(sum(accuracies_dev)/len(accuracies_dev)))
+
+        # if out_fpath is not None:
+
+        #     test_pred = predictions.eval({X: X_test, keep_prob: 1.0})
             
-            with open(out_fpath, 'w') as f:
-                print("id,target", file=f)
-                for i in range(len(test_entries)):
-                    eid = test_entries[i][0]
-                    pred = int(test_pred[0][i])
-                    print("{},{}".format(eid, pred), file=f)
+        #     with open(out_fpath, 'w') as f:
+        #         print("id,target", file=f)
+        #         for i in range(len(test_entries)):
+        #             eid = test_entries[i][0]
+        #             pred = int(test_pred[0][i])
+        #             print("{},{}".format(eid, pred), file=f)
 
 
 def load_default_embeddings(vocab_f, matrix_f):
@@ -170,17 +207,19 @@ def create_emb_dataset(entries, wvecs):
 
     m = len(entries)
     n_x = E.shape[1]
-
-    X = np.zeros((n_x, m))
+    unk_vec = np.mean(E, axis=0)
+    
+    X = np.zeros((n_x, m, Tx))
     Y = np.zeros((1, m))
     for i in range(m):
-        text_words = set(word_tokenize(entries[i][1]))
-        for word in text_words:
+        text_words = word_tokenize(entries[i][1])
+        for iw in range(len(text_words[:Tx])):
+            word = text_words[iw]
             if word in vocab:
                 widx = vocab[word]
-                X[:,i] += E[widx]
-            # else: if OOV, then add zero-vector (= do nothing)
-        X[:,i] /= len(text_words)
+                X[:,i,iw] = E[widx]
+            else:
+                X[:,i,iw] = unk_vec
         Y[0][i] = entries[i][2]
 
     return X, Y
