@@ -8,18 +8,20 @@ import csv
 import random
 import pickle
 import sys
+import re
 
 import pdb
 
 LEARNING_RATE = 0.002
 NUM_EPOCHS = 400
+DO_KEEP_RATE = 0.75
 DEV_SIZE = 2200
 
 
 def main(train_fpath, test_fpath, out_fpath):
 
-    wvecs = load_default_embeddings('embeddings/en_vocabulary.pickle', 'embeddings/en_embedding_matrix.npy')
-    #wvecs = load_glove_embeddings('embeddings/glove.twitter.27B.200d.txt')
+    #wvecs = load_default_embeddings('embeddings/en_vocabulary.pickle', 'embeddings/en_embedding_matrix.npy')
+    wvecs = load_glove_embeddings('embeddings/glove.twitter.27B.50d.txt')
     m, n_x = wvecs[1].shape
     
     train_entries, test_entries = parse_input_data(train_fpath, test_fpath)
@@ -63,7 +65,7 @@ def main(train_fpath, test_fpath, out_fpath):
         sess.run(init)
         
         for epoch in range(NUM_EPOCHS):
-            _, cost_ = sess.run([optimizer, cost], feed_dict={X:X_train, Y:Y_train, keep_prob: 0.75})
+            _, cost_ = sess.run([optimizer, cost], feed_dict={X:X_train, Y:Y_train, keep_prob: DO_KEEP_RATE})
             print("Epoch: {} | Cost: {}".format(epoch+1, cost_))
 
         predictions = tf.round(tf.sigmoid(Z3))
@@ -134,6 +136,18 @@ def parse_input_data(train_fpath, test_fpath):
         for row in reader:
             id_ = int(row['id'])
             text = ' '.join([row['keyword'], row['location'], row['text']]).lower()
+            # remove hashtag #
+            text = text.replace('#', '')
+            # replace URLs with <url>
+            text = re.sub(r'https?:\/\/[^ ]*', '<url>', text)
+            # replace usernames with <user>
+            text = re.sub(r'@[^ ,.]*', '<user>', text)
+            # replace emojis
+            text = text.replace(':)', '<smile>')
+            text = text.replace(':(', '<sadface>')
+            text = text.replace('xD', '<lolface>')
+            text = text.replace(':|', '<neutralface>')
+            
             test_entries.append( (id_, text, None) )
 
     random.shuffle(train_entries)
