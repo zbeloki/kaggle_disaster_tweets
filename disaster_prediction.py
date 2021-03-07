@@ -12,11 +12,11 @@ import re
 
 import pdb
 
-LEARNING_RATE = 0.003
+LEARNING_RATE = 0.002
 NUM_EPOCHS = 100
-DO_KEEP_RATE = 0.8
+DO_KEEP_RATE = 0.6
 DEV_SIZE = 3000
-BATCH_SIZE = 300
+BATCH_SIZE = 500
 Tx = 22  # max sentence size
 
 
