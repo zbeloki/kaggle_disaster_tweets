@@ -152,7 +152,7 @@ def parse_text(text):
     # replace URLs with <url>
     text = re.sub(r'https?:\/\/[^ ]*', '<url>', text)
     # replace usernames with <user>
-    text = re.sub(r'@[^ ,.]*', '<user>', text)
+    #text = re.sub(r'@[^ ,.]*', '<user>', text)
     # replace numbers with <number>
     text = re.sub(r'\b[\d+]\.?[\d]*\b', '<number>', text)
     # replace emojis
