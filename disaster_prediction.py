@@ -15,7 +15,7 @@ import pdb
 LEARNING_RATE = 0.002
 NUM_EPOCHS = 400
 DO_KEEP_RATE = 0.75
-DEV_SIZE = 2200
+DEV_SIZE = 3000
 
 
 def main(train_fpath, test_fpath, out_fpath):
@@ -127,6 +127,7 @@ def parse_input_data(train_fpath, test_fpath):
         for row in reader:
             id_ = int(row['id'])
             text = ' '.join([row['keyword'], row['location'], row['text']]).lower()
+            text = parse_text(text)
             cls = int(row['target'])
             train_entries.append( (id_, text, cls) )
 
@@ -136,23 +137,31 @@ def parse_input_data(train_fpath, test_fpath):
         for row in reader:
             id_ = int(row['id'])
             text = ' '.join([row['keyword'], row['location'], row['text']]).lower()
-            # remove hashtag #
-            text = text.replace('#', '')
-            # replace URLs with <url>
-            text = re.sub(r'https?:\/\/[^ ]*', '<url>', text)
-            # replace usernames with <user>
-            text = re.sub(r'@[^ ,.]*', '<user>', text)
-            # replace emojis
-            text = text.replace(':)', '<smile>')
-            text = text.replace(':(', '<sadface>')
-            text = text.replace('xD', '<lolface>')
-            text = text.replace(':|', '<neutralface>')
-            
+            text = parse_text(text)
             test_entries.append( (id_, text, None) )
 
     random.shuffle(train_entries)
 
     return train_entries, test_entries
+
+
+def parse_text(text):
+
+    # remove hashtag #
+    text = text.replace('#', '')
+    # replace URLs with <url>
+    text = re.sub(r'https?:\/\/[^ ]*', '<url>', text)
+    # replace usernames with <user>
+    text = re.sub(r'@[^ ,.]*', '<user>', text)
+    # replace numbers with <number>
+    text = re.sub(r'\b[\d+]\.?[\d]*\b', '<number>', text)
+    # replace emojis
+    text = text.replace(':)', '<smile>')
+    text = text.replace(':(', '<sadface>')
+    text = text.replace('xD', '<lolface>')
+    text = text.replace(':|', '<neutralface>')
+
+    return text
 
 
 def create_emb_dataset(entries, wvecs):
