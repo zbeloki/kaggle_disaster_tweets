@@ -1,5 +1,6 @@
 import tensorflow as tf
 from tensorflow.python.framework import ops
+from tensorflow.contrib.layers import xavier_initializer
 import numpy as np
 from nltk.tokenize import word_tokenize
 
@@ -33,68 +34,43 @@ def main(train_fpath, test_fpath, out_fpath):
     X_train, Y_train = create_emb_dataset(train_entries[DEV_SIZE:], wvecs)
     X_test, _ = create_emb_dataset(test_entries, wvecs)
 
-    ops.reset_default_graph()
-
-    keep_prob = tf.placeholder(tf.float32, name='keep_prob')
-    
-    X = tf.placeholder(tf.float32, shape=[n_x, None, Tx], name='X')
-    Y = tf.placeholder(tf.float32, shape=[1, None], name='Y')
-
-    h = 100
-    params = {}
-    params['Wc'] = tf.get_variable("Wc", [h, h + n_x], initializer=tf.contrib.layers.xavier_initializer())
-    params['Wu'] = tf.get_variable("Wu", [h, h + n_x], initializer=tf.contrib.layers.xavier_initializer())
-    params['Wf'] = tf.get_variable("Wf", [h, h + n_x], initializer=tf.contrib.layers.xavier_initializer())
-    params['Wo'] = tf.get_variable("Wo", [h, h + n_x], initializer=tf.contrib.layers.xavier_initializer())
-    params['Wy'] = tf.get_variable("Wy", [1, h], initializer=tf.contrib.layers.xavier_initializer())
-    params['b_c'] = tf.get_variable("b_c", [h, 1], initializer=tf.zeros_initializer())
-    params['b_u'] = tf.get_variable("b_u", [h, 1], initializer=tf.zeros_initializer())
-    params['b_f'] = tf.get_variable("b_f", [h, 1], initializer=tf.zeros_initializer())
-    params['b_o'] = tf.get_variable("b_o", [h, 1], initializer=tf.zeros_initializer())
-    params['b_y'] = tf.get_variable("b_y", [1, 1], initializer=tf.zeros_initializer())
-
-    C_prev = tf.get_variable("C_prev", [h, BATCH_SIZE], initializer=tf.zeros_initializer())
-    A_prev = tf.get_variable("A_prev", [h, BATCH_SIZE], initializer=tf.zeros_initializer())
-
-    for t in range(Tx):
-        Xt = X[:,:,t]
-        A_prev, C_prev = lstm_cell(Xt, A_prev, C_prev, params)
-    out_z = tf.add(tf.matmul(params['Wy'], A_prev), params['b_y'])
-
-    logits = tf.transpose(out_z)
-    labels = tf.transpose(Y)
-
-    cost = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=labels))
-    optimizer = tf.train.AdamOptimizer(LEARNING_RATE).minimize(cost)
+    tfp = {}  # Tensorflow parameters
+    create_full_model(n_x, BATCH_SIZE, tfp)
     
     init = tf.global_variables_initializer()
     with tf.Session() as sess:
-
         sess.run(init)
 
-        train(X_train, Y_train, sess, optimizer, cost)
+        train(X_train, Y_train, sess, tfp)
         
-        predictions = tf.round(tf.sigmoid(out_z))
-        correct_prediction = tf.equal(predictions, Y)
-        accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
-
-        accuracy_train = get_accuracy(X_train, Y_train, accuracy)
+        add_accuracy_to_model(tfp)
+        
+        accuracy_train = get_accuracy(X_train, Y_train, tfp)
         print ("Train Accuracy: {}".format(accuracy_train))
 
-        accuracy_dev = get_accuracy(X_dev, Y_dev, accuracy)
+        accuracy_dev = get_accuracy(X_dev, Y_dev, tfp)
         print ("Dev Accuracy: {}".format(accuracy_dev))
 
-        if out_fpath is not None:
-            test_pred = []
-            num_batches = math.ceil(X_test.shape[1] / BATCH_SIZE)
-            for i_batch in range(num_batches):
-                X_batch = np.zeros([n_x, BATCH_SIZE, Tx])
-                i_first = i_batch * BATCH_SIZE
-                i_last = min((i_batch + 1) * BATCH_SIZE, X_test.shape[1])
-                X_batch[: , :i_last-i_first, :] = X_test[: , i_first:i_last, :]
-                ys = predictions.eval({X: X_batch, keep_prob: 1.0})
-                for y in ys[0]:
-                    test_pred.append(y)
+        keys = ['Wc', 'Wu', 'Wf', 'Wo', 'Wy', 'b_c', 'b_u', 'b_f', 'b_o', 'b_y']
+        params = { key: tfp[key] for key in keys }
+        learnt_params = sess.run(params)
+
+    # make predictions on test data
+
+    if out_fpath is not None:
+        m = X_test.shape[1]
+        batch_size = m
+
+        tfp = {}
+        create_prediction_model(n_x, batch_size, tfp)
+        add_accuracy_to_model(tfp)
+
+        init = tf.global_variables_initializer()
+        with tf.Session() as sess:
+            sess.run(init)
+            assign_trained_values(tfp, learnt_params, sess)
+
+            test_pred = predict_test_data(X_test, batch_size, tfp)
             with open(out_fpath, 'w') as f:
                 print("id,target", file=f)
                 for i in range(len(test_entries)):
@@ -103,24 +79,69 @@ def main(train_fpath, test_fpath, out_fpath):
                     print("{},{}".format(eid, pred), file=f)
 
 
-def lstm_cell(Xt, A_prev, C_prev, params):
+def create_full_model(n_x, batch_size, tfp):
 
-    i_v = tf.concat([A_prev, Xt], 0)
-    C_new = tf.math.tanh(tf.add(tf.matmul(params['Wc'], i_v), params['b_c']))
-    Gu = tf.math.sigmoid(tf.add(tf.matmul(params['Wu'], i_v), params['b_u']))
-    Gf = tf.math.sigmoid(tf.add(tf.matmul(params['Wf'], i_v), params['b_f']))
-    Go = tf.math.sigmoid(tf.add(tf.matmul(params['Wo'], i_v), params['b_o']))
-    C = Gu * C_new + Gf * C_prev
-    A = tf.nn.dropout(Go * tf.math.tanh(C), DO_KEEP_RATE)
+    create_prediction_model(n_x, batch_size, tfp)
 
-    return A, C
+    tfp['logits'] = tf.transpose(tfp['out_z'])
+    tfp['labels'] = tf.transpose(tfp['Y'])
+
+    tfp['cost'] = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=tfp['logits'], labels=tfp['labels']))
+    tfp['optimizer'] = tf.train.AdamOptimizer(LEARNING_RATE).minimize(tfp['cost'])
+    
+
+def create_prediction_model(n_x, batch_size, tfp):
+
+    ops.reset_default_graph()
+
+    tfp['X'] = tf.placeholder(tf.float32, shape=[n_x, None, Tx])
+    tfp['Y'] = tf.placeholder(tf.float32, shape=[1, None])
+    tfp['keep_prob'] = tf.placeholder(tf.float32)
+    
+    h = 100
+    tfp['Wc'] = tf.get_variable("Wc", [h, h + n_x], initializer=xavier_initializer())
+    tfp['Wu'] = tf.get_variable("Wu", [h, h + n_x], initializer=xavier_initializer())
+    tfp['Wf'] = tf.get_variable("Wf", [h, h + n_x], initializer=xavier_initializer())
+    tfp['Wo'] = tf.get_variable("Wo", [h, h + n_x], initializer=xavier_initializer())
+    tfp['Wy'] = tf.get_variable("Wy", [1, h], initializer=xavier_initializer())
+    tfp['b_c'] = tf.get_variable("b_c", [h, 1], initializer=tf.zeros_initializer())
+    tfp['b_u'] = tf.get_variable("b_u", [h, 1], initializer=tf.zeros_initializer())
+    tfp['b_f'] = tf.get_variable("b_f", [h, 1], initializer=tf.zeros_initializer())
+    tfp['b_o'] = tf.get_variable("b_o", [h, 1], initializer=tf.zeros_initializer())
+    tfp['b_y'] = tf.get_variable("b_y", [1, 1], initializer=tf.zeros_initializer())
+
+    tfp['C_prev'] = tf.get_variable("C_prev", [h, batch_size], initializer=tf.zeros_initializer())
+    tfp['A_prev'] = tf.get_variable("A_prev", [h, batch_size], initializer=tf.zeros_initializer())
+
+    tfp['A_prev'] = tf.zeros(tfp['A_prev'].shape)
+    tfp['C_prev'] = tf.zeros(tfp['C_prev'].shape)
+    for t in range(Tx):
+        tfp['Xt'] = tfp['X'][:,:,t]
+        lstm_cell(tfp)
+        tfp['A_prev'] = tfp['A']
+        tfp['C_prev'] = tfp['C']
+    tfp['out_z'] = tf.add(tf.matmul(tfp['Wy'], tfp['A_prev']), tfp['b_y'])
 
 
-def train(X_data, Y_data, session, optimizer, cost):
+def add_accuracy_to_model(tfp):
 
-    X = tf.get_default_graph().get_tensor_by_name("X:0")
-    Y = tf.get_default_graph().get_tensor_by_name("Y:0")
-    keep_prob = tf.get_default_graph().get_tensor_by_name("keep_prob:0")
+    tfp['predictions'] = tf.round(tf.sigmoid(tfp['out_z']))
+    tfp['correct_prediction'] = tf.equal(tfp['predictions'], tfp['Y'])
+    tfp['accuracy'] = tf.reduce_mean(tf.cast(tfp['correct_prediction'], "float"))
+    
+
+def lstm_cell(tfp):
+
+    tfp['i_v'] = tf.concat([tfp['A_prev'], tfp['Xt']], 0)
+    tfp['C_new'] = tf.math.tanh(tf.add(tf.matmul(tfp['Wc'], tfp['i_v']), tfp['b_c']))
+    tfp['Gu'] = tf.math.sigmoid(tf.add(tf.matmul(tfp['Wu'], tfp['i_v']), tfp['b_u']))
+    tfp['Gf'] = tf.math.sigmoid(tf.add(tf.matmul(tfp['Wf'], tfp['i_v']), tfp['b_f']))
+    tfp['Go'] = tf.math.sigmoid(tf.add(tf.matmul(tfp['Wo'], tfp['i_v']), tfp['b_o']))
+    tfp['C'] = tfp['Gu'] * tfp['C_new'] + tfp['Gf'] * tfp['C_prev']
+    tfp['A'] = tf.nn.dropout(tfp['Go'] * tf.math.tanh(tfp['C']), DO_KEEP_RATE)
+
+
+def train(X_data, Y_data, session, tfp):
     
     num_batches = int(X_data.shape[1] / BATCH_SIZE)
     for epoch in range(NUM_EPOCHS):
@@ -128,24 +149,48 @@ def train(X_data, Y_data, session, optimizer, cost):
         for i_batch in range(num_batches):
             X_batch = X_data[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
             Y_batch = Y_data[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
-            _, batch_cost = session.run([optimizer, cost], feed_dict={X:X_batch, Y:Y_batch, keep_prob: DO_KEEP_RATE})
+            _, batch_cost = session.run([tfp['optimizer'], tfp['cost']],
+                                        feed_dict={tfp['X']:X_batch,
+                                                   tfp['Y']:Y_batch,
+                                                   tfp['keep_prob']: DO_KEEP_RATE})
             print("Batch: {} | Cost: {}".format(i_batch, batch_cost))
 
 
-def get_accuracy(X_data, Y_data, accuracy):
-
-    X = tf.get_default_graph().get_tensor_by_name("X:0")
-    Y = tf.get_default_graph().get_tensor_by_name("Y:0")
-    keep_prob = tf.get_default_graph().get_tensor_by_name("keep_prob:0")
+def get_accuracy(X_data, Y_data, tfp):
 
     num_batches = int(X_data.shape[1] / BATCH_SIZE)
     accuracies = []
     for i_batch in range(num_batches):
         X_batch = X_data[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
         Y_batch = Y_data[: , i_batch*BATCH_SIZE:(i_batch+1)*BATCH_SIZE]
-        accuracies.append(accuracy.eval({X: X_batch, Y: Y_batch, keep_prob: 1.0}))
+        accuracies.append(tfp['accuracy'].eval({
+            tfp['X']: X_batch,
+            tfp['Y']: Y_batch,
+            tfp['keep_prob']: 1.0
+        }))
 
     return sum(accuracies) / len(accuracies)
+
+
+def assign_trained_values(tfp, learnt_vals, sess):
+
+    for pid in learnt_vals.keys():
+        op = tf.assign(tfp[pid], learnt_vals[pid])
+        sess.run(op)
+    
+
+def predict_test_data(X_test, batch_size, tfp):
+
+    m = X_test.shape[1]
+    test_pred = []
+    num_batches = int(m / batch_size)
+    for i_batch in range(num_batches):
+        X_batch = X_test[: , i_batch*batch_size:(i_batch+1)*batch_size]
+        ys = tfp['predictions'].eval({tfp['X']: X_batch, tfp['keep_prob']: 1.0})
+        for y in ys[0]:
+            test_pred.append(y)
+
+    return test_pred
     
             
 def load_default_embeddings(vocab_f, matrix_f):
